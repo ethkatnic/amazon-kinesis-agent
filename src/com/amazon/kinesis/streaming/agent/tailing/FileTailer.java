@@ -24,6 +24,7 @@ import org.joda.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.amazon.kinesis.streaming.agent.Agent;
 import com.amazon.kinesis.streaming.agent.AgentContext;
 import com.amazon.kinesis.streaming.agent.IHeartbeatProvider;
 import com.amazon.kinesis.streaming.agent.metrics.Metrics;
@@ -46,7 +47,6 @@ import com.google.common.util.concurrent.AbstractScheduledService;
 // TODO: Refactor into two classes: FileTailer and FileTailerService, similar to AsyncPublisher and AsyncPublisherService
 public class FileTailer<R extends IRecord> extends AbstractExecutionThreadService implements IHeartbeatProvider {
     private static final int NO_TIMEOUT = -1;
-    private static final int MAX_SPIN_WAIT_TIME_MILLIS = 1000;
     private static final Logger LOGGER = LoggerFactory.getLogger(FileTailer.class);
 
     @Getter private final AgentContext agentContext;
@@ -63,6 +63,7 @@ public class FileTailer<R extends IRecord> extends AbstractExecutionThreadServic
     private boolean isNewFile = false;
     protected final long minTimeBetweenFilePollsMillis;
     protected final long maxTimeBetweenFileTrackerRefreshMillis;
+    protected final long maxSpinWaitTime;
     private AbstractScheduledService metricsEmitter;
 
     private boolean isInitialized = false;
@@ -84,6 +85,7 @@ public class FileTailer<R extends IRecord> extends AbstractExecutionThreadServic
         this.fileTracker = new SourceFileTracker(this.agentContext, this.flow);
         this.minTimeBetweenFilePollsMillis = flow.minTimeBetweenFilePollsMillis();
         this.maxTimeBetweenFileTrackerRefreshMillis = flow.maxTimeBetweenFileTrackerRefreshMillis();
+        this.maxSpinWaitTime = flow.getMaxSpinWaitTimeMillis();
         this.metricsEmitter = new AbstractScheduledService() {
             @Override
             protected void runOneIteration() throws Exception {
@@ -113,19 +115,34 @@ public class FileTailer<R extends IRecord> extends AbstractExecutionThreadServic
 
     @Override
     public void run() {
-        do {
-            if (0 == runOnce() && !isNewFile) {
-                // Sleep only if the previous run did not process any records
-                if(isRunning() && minTimeBetweenFilePollsMillis > 0) {
-                    try {
-                        Thread.sleep(minTimeBetweenFilePollsMillis);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        LOGGER.trace("{}: Thread interrupted", e);
+        try {
+            do {
+                if (0 == runOnce() && !isNewFile) {
+                    // Sleep only if the previous run did not process any records
+                    if(isRunning() && minTimeBetweenFilePollsMillis > 0) {
+                        try {
+                            Thread.sleep(minTimeBetweenFilePollsMillis);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            LOGGER.trace("{}: Thread interrupted", e);
+                        }
                     }
                 }
+            } while (isRunning());
+        } catch (Throwable t) {
+            String fatalMessage = "Fatal error in FileTailer - shutting down agent";
+            try {
+                try {
+                    LOGGER.error(fatalMessage, t);
+                } finally {
+                    System.err.println(fatalMessage);
+                    t.printStackTrace();
+                }
+            } finally {
+                Agent.setDontShutdownOnExit(true);
+                System.exit(1);
             }
-        } while (isRunning());
+        }
     }
 
     protected int runOnce() {
@@ -194,7 +211,7 @@ public class FileTailer<R extends IRecord> extends AbstractExecutionThreadServic
                     : Long.MAX_VALUE;
             if(remaining <= 0)
                 return false;
-            long sleepTime = Math.min(MAX_SPIN_WAIT_TIME_MILLIS, remaining);
+            long sleepTime = Math.min(maxSpinWaitTime, remaining);
             LOGGER.trace("{}: Waiting IDLE. Sleeping {}ms. {}", serviceName(), sleepTime, toString());
             publisher.flush();
             try {

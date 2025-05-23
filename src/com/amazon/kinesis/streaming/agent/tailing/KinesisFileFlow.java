@@ -31,7 +31,7 @@ import com.google.common.collect.Range;
 @ToString(callSuper=true)
 public class KinesisFileFlow extends FileFlow<KinesisRecord> {
     public static final Range<Long> VALID_MAX_BUFFER_AGE_RANGE_MILLIS = Range.closed(
-            TimeUnit.SECONDS.toMillis(1), TimeUnit.MINUTES.toMillis(15));
+            TimeUnit.MILLISECONDS.toMillis(1), TimeUnit.MINUTES.toMillis(15));
     public static final Range<Integer> VALID_MAX_BUFFER_SIZE_RECORDS_RANGE = Range.closed(1, KinesisConstants.MAX_BUFFER_SIZE_RECORDS);
     public static final Range<Integer> VALID_MAX_BUFFER_SIZE_BYTES_RANGE = Range.closed(1, KinesisConstants.MAX_BUFFER_SIZE_BYTES);
     public static final Range<Long> VALID_WAIT_ON_FULL_PUBLISH_QUEUE_MILLIS_RANGE = Range.closed(
@@ -42,12 +42,14 @@ public class KinesisFileFlow extends FileFlow<KinesisRecord> {
     @Getter protected final String id;
     @Getter protected final String destination;
     @Getter protected final PartitionKeyOption partitionKeyOption;
+    @Getter protected final String partitionKeyIdentifier;
 
     public KinesisFileFlow(AgentContext context, Configuration config) {
         super(context, config);
         destination = readString(KinesisConstants.DESTINATION_KEY);
         id = "kinesis:" + destination + ":" + sourceFile.toString();
         partitionKeyOption = readEnum(PartitionKeyOption.class, KinesisConstants.PARTITION_KEY, PartitionKeyOption.RANDOM);
+        partitionKeyIdentifier = readString(KinesisConstants.PARTITION_KEY_IDENTIFIER, null);
     }
 
     @Override

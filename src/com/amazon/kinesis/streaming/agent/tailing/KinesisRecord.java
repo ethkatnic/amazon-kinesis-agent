@@ -17,24 +17,34 @@ import java.nio.ByteBuffer;
 import java.util.concurrent.ThreadLocalRandom;
 
 import com.amazon.kinesis.streaming.agent.tailing.KinesisConstants.PartitionKeyOption;
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class KinesisRecord extends AbstractRecord {
+    private static final Logger LOGGER = LoggerFactory.getLogger(KinesisRecord.class);
+    private static final JsonFactory JSON_FACTORY = new ObjectMapper().getFactory();
     protected final String partitionKey;
     
     public KinesisRecord(TrackedFile file, long offset, ByteBuffer data, long originalLength) {
         super(file, offset, data, originalLength);
         Preconditions.checkNotNull(file);
-        partitionKey = generatePartitionKey(((KinesisFileFlow)file.getFlow()).getPartitionKeyOption());
+        KinesisFileFlow flow = (KinesisFileFlow)file.getFlow();
+        partitionKey = generatePartitionKey(flow.getPartitionKeyOption(), flow.getPartitionKeyIdentifier());
     }
 
     public KinesisRecord(TrackedFile file, long offset, byte[] data, long originalLength) {
         super(file, offset, data, originalLength);
         Preconditions.checkNotNull(file);
-        partitionKey = generatePartitionKey(((KinesisFileFlow)file.getFlow()).getPartitionKeyOption());
+        KinesisFileFlow flow = (KinesisFileFlow)file.getFlow();
+        partitionKey = generatePartitionKey(flow.getPartitionKeyOption(), flow.getPartitionKeyIdentifier());
     }
     
     public String partitionKey() {
@@ -48,16 +58,20 @@ public class KinesisRecord extends AbstractRecord {
     
     @Override
     public long length() {
-        return dataLength() + partitionKey.length();
+        return dataLength() + partitionKeyLength();
     }
     
     @Override
     protected int getMaxDataSize() {
-        return KinesisConstants.MAX_RECORD_SIZE_BYTES - partitionKey.length();
+        return KinesisConstants.MAX_RECORD_SIZE_BYTES - partitionKeyLength();
+    }
+
+    public int partitionKeyLength() {
+        return partitionKey == null ? 0 : partitionKey.length();
     }
     
     @VisibleForTesting
-    String generatePartitionKey(PartitionKeyOption option) {
+    String generatePartitionKey(PartitionKeyOption option, String partitionKeyIdentifier) {
         Preconditions.checkNotNull(option);
         
         if (option == PartitionKeyOption.DETERMINISTIC) {
@@ -67,7 +81,21 @@ public class KinesisRecord extends AbstractRecord {
         }
         if (option == PartitionKeyOption.RANDOM)
             return "" + ThreadLocalRandom.current().nextDouble(1000000);
-        
+
+        if (option == PartitionKeyOption.CUSTOM) {
+            try (JsonParser parser = JSON_FACTORY.createParser(data.array(), (data.arrayOffset() + data.position()), data.remaining())) {
+                while (parser.nextToken() != JsonToken.END_OBJECT) {
+                    if (partitionKeyIdentifier.equals(parser.currentName())) {
+                        parser.nextToken();
+                        return parser.getText();
+                    }
+                }
+            } catch (Exception e) {
+                LOGGER.error("Failed to generate partition key", e);
+                return null;
+            }
+        }
+
         return null;
     }
 }

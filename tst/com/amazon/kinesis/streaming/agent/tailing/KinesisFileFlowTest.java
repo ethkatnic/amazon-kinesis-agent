@@ -47,8 +47,14 @@ public class KinesisFileFlowTest extends FileFlowTest<KinesisFileFlow> {
             put(getDestinationKey(), "des2");
             put(KinesisConstants.PARTITION_KEY, "RANDOM");
         }}));
+        KinesisFileFlow ff3 = buildFileFlow(context, new Configuration(new HashMap<String, Object>() {{
+            put("filePattern", file);
+            put(getDestinationKey(), "des3");
+            put(KinesisConstants.PARTITION_KEY, "CUSTOM");
+        }}));
         assertEquals(ff1.getPartitionKeyOption(), KinesisConstants.PartitionKeyOption.DETERMINISTIC);
         assertEquals(ff2.getPartitionKeyOption(), KinesisConstants.PartitionKeyOption.RANDOM);
+        assertEquals(ff3.getPartitionKeyOption(), KinesisConstants.PartitionKeyOption.CUSTOM);
 	}
     
     @DataProvider(name="badPartitionKeyOptionInConfig")

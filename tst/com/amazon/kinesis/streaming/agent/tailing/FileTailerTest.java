@@ -9,13 +9,16 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.fail;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.Permission;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -33,6 +36,7 @@ import com.amazon.kinesis.streaming.agent.tailing.testing.FileRotator;
 import com.amazon.kinesis.streaming.agent.tailing.testing.FileSender;
 import com.amazon.kinesis.streaming.agent.tailing.testing.RememberedTrackedFile;
 import com.amazon.kinesis.streaming.agent.tailing.testing.TailingTestBase;
+import com.amazon.kinesis.streaming.agent.tailing.testing.TestSecurityManager;
 import com.amazon.kinesis.streaming.agent.tailing.testing.TestableFileTailer;
 import com.amazon.kinesis.streaming.agent.tailing.testing.FileSender.FileSenderFactory;
 import com.amazon.kinesis.streaming.agent.testing.TestUtils;
@@ -281,6 +285,39 @@ public class FileTailerTest extends TailingTestBase {
         }.call();
     }
 
+    @Test(dataProvider="rotatorsSendersTailersInitialPosition", timeOut=TEST_TIMEOUT, skipFailedInvocations=true, invocationCount=TEST_REPS)
+    public void testErrorHandlingInRunLoop(
+            FileRotatorFactory rotatorFactory,
+            TestableFileTailerFactory<FirehoseRecord> ignoredTailerFactory,
+            FileSenderFactory<FirehoseRecord> senderFactory,
+            InitialPosition initialPosition) throws Exception {
+        SecurityManager originalSecurityManager = System.getSecurityManager();
+        AtomicBoolean exitCalled = new AtomicBoolean(false);
+        SecurityManager testSecurityManager= new TestSecurityManager(exitCalled);
+
+        try {
+            TestableFileTailerFailureFactory failureFactory = new TestableFileTailerFailureFactory();
+            System.setSecurityManager(testSecurityManager);
+            new TailerTestRunner(true, rotatorFactory, senderFactory, failureFactory, null, initialPosition) {
+                @Override
+                protected void doRun() throws Exception {
+                    // Wait for the exit to be called or timeout. Error occurs on tailer thread and needs to reach application shutdown
+                    waitForSystemExit(exitCalled);
+                }
+
+                @Override
+                protected void end() {
+                    // Skip normal cleanup since we expect the tailer to be in an error state
+                }
+            }.call();
+
+        } finally {
+            System.setSecurityManager(originalSecurityManager);
+        }
+
+        assertTrue(exitCalled.get(), "System.exit should have been called");
+    }
+
     @DataProvider(name = "rotatorsSendersTailersInitialPosition")
     public Object[][] getrotatorsSendersTailersInitialPositionData() throws IOException {
         Object[][] initialPositions = new Object[][] {
@@ -323,6 +360,16 @@ public class FileTailerTest extends TailingTestBase {
                 //{new FileSender.MisbehavingFileSenderFactory<FirehoseRecord>()},
         };
         return senders;
+    }
+
+    private void waitForSystemExit(AtomicBoolean exitCalled) throws InterruptedException {
+        long startTime = System.currentTimeMillis();
+        while (!exitCalled.get()) {
+            if (System.currentTimeMillis() - startTime > 5000) {
+                fail("Timeout waiting for System.exit to be called");
+            }
+            Thread.sleep(100);
+        }
     }
 
     public abstract class TailerTestRunner implements Callable<Void> {
@@ -474,6 +521,15 @@ public class FileTailerTest extends TailingTestBase {
         @Override
         protected TestableFileTailer<FirehoseRecord> create(AgentContext context, FileFlow<FirehoseRecord> flow, FileSender<FirehoseRecord> sender, FileCheckpointStore checkpoints) throws IOException {
             return TestableFileTailer.createFirehoseTailer(context, flow, sender, checkpoints);
+        }
+    }
+
+    public class TestableFileTailerFailureFactory extends TestableFileTailerFactory<FirehoseRecord> {
+        @Override
+        protected TestableFileTailer<FirehoseRecord> create(AgentContext context,
+                FileFlow<FirehoseRecord> flow, FileSender<FirehoseRecord> sender,
+                FileCheckpointStore checkpoints) throws IOException {
+            return TestableFileTailer.createFailingTailer(context, flow, sender, checkpoints);
         }
     }
 }

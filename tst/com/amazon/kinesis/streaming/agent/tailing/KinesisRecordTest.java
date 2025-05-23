@@ -6,6 +6,7 @@ package com.amazon.kinesis.streaming.agent.tailing;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 
 import org.apache.commons.lang3.RandomUtils;
@@ -72,6 +73,49 @@ public class KinesisRecordTest extends TestBase {
         byte[] data = RandomUtils.nextBytes(200);
         KinesisRecord record = new KinesisRecord(file, 1023, data, data.length);
         Assert.assertNotNull(record.partitionKey());
-        Assert.assertEquals(record.partitionKey(), record.generatePartitionKey(partitionKeyOption));
+        Assert.assertEquals(record.partitionKey(), record.generatePartitionKey(partitionKeyOption, null));
+    }
+
+    @Test
+    public void testGeneratePartitionKeyWithCustomOption() {
+        when(((KinesisFileFlow)flow).getPartitionKeyOption()).thenReturn(KinesisConstants.PartitionKeyOption.CUSTOM);
+        when(((KinesisFileFlow)flow).getPartitionKeyIdentifier()).thenReturn("userId");
+
+        String jsonData = "{\"userId\": \"12345\", \"name\": \"John\"},{\"userId\": \"34567\", \"name\": \"Doe\"}";
+        byte[] data = jsonData.getBytes(StandardCharsets.UTF_8);
+        ByteBuffer view = ByteBuffers.getPartialView(ByteBuffer.wrap(data), 36,34);
+
+        KinesisRecord record = new KinesisRecord(file, 1023, view, view.remaining());
+
+        Assert.assertEquals(record.partitionKey(), "34567");
+    }
+
+    @Test
+    public void testGeneratePartitionKeyWithInvalidIdentifier() {
+        when(((KinesisFileFlow)flow).getPartitionKeyOption()).thenReturn(KinesisConstants.PartitionKeyOption.CUSTOM);
+        when(((KinesisFileFlow)flow).getPartitionKeyIdentifier()).thenReturn("nonexistent");
+
+        String jsonData = "{\"userId\": \"12345\", \"name\": \"John\"},{\"userId\": \"34567\", \"name\": \"Doe\"}";
+        byte[] data = jsonData.getBytes(StandardCharsets.UTF_8);
+        ByteBuffer view = ByteBuffers.getPartialView(ByteBuffer.wrap(data), 36,34);
+
+        KinesisRecord record = new KinesisRecord(file, 1023, view, view.remaining());
+
+        Assert.assertNull(record.partitionKey());
+        Assert.assertEquals(record.partitionKeyLength(), 0);
+    }
+
+    @Test
+    public void testGeneratePartitionKeyWithInvalidJson() {
+        when(((KinesisFileFlow)flow).getPartitionKeyOption()).thenReturn(KinesisConstants.PartitionKeyOption.CUSTOM);
+        when(((KinesisFileFlow)flow).getPartitionKeyIdentifier()).thenReturn("userId");
+
+        byte[] data = "invalid json".getBytes(StandardCharsets.UTF_8);
+        ByteBuffer view = ByteBuffers.getPartialView(ByteBuffer.wrap(data), 0,12);
+
+        KinesisRecord record = new KinesisRecord(file, 1023, view, view.remaining());
+
+        Assert.assertNull(record.partitionKey());
+        Assert.assertEquals(record.partitionKeyLength(), 0);
     }
 }
